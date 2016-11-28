@@ -29,6 +29,7 @@ public class MainActivity extends AppCompatActivity {
             e.printStackTrace();
         }
 
+        //以下代码在4.4上会奔溃
 //        try {
 //            Class<?> hello = Class.forName("com.sample.Core");
 //            Method parse = hello.getDeclaredMethod("parse");
