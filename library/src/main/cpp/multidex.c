@@ -7,6 +7,7 @@
 #include <jni.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <stdbool.h>
 
 //大小端定义
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -84,12 +85,87 @@ union JValue {
 #endif
 };
 
-typedef struct {
+
+struct MemMapping {
+    void *addr;           /* start of data */
+    size_t length;         /* length of data */
+
+    void *baseAddr;       /* page-aligned base address */
+    size_t baseLength;     /* length of mapping */
+};
+
+
+struct DvmDex {
+    /* pointer to the DexFile we're associated with */
+    void *pDexFile;
+
+    /* clone of pDexFile->pHeader (it's used frequently enough) */
+    const void *pHeader;
+
+    /* interned strings; parallel to "stringIds" */
+    struct StringObject **pResStrings;
+
+    /* resolved classes; parallel to "typeIds" */
+    struct ClassObject **pResClasses;
+
+    /* resolved methods; parallel to "methodIds" */
+    struct Method **pResMethods;
+
+    /* resolved instance fields; parallel to "fieldIds" */
+    /* (this holds both InstField and StaticField) */
+    struct Field **pResFields;
+
+    /* interface method lookup cache */
+    struct AtomicCache *pInterfaceCache;
+
+    /* shared memory region with file contents */
+    bool isMappedReadOnly;
+    struct MemMapping memMap;
+
+    jobject dex_object;
+
+};
+
+struct ClassObject {
     void *clazz;
+    u4 lock;
+
+    u4 instanceData[4];
+
+    const char *descriptor;
+    char *descriptorAlloc;
+
+    u4 accessFlags;
+
+    u4 serialNumber;
+
+    struct DvmDex *pDvmDex;
+
+};
+
+struct ArrayObject {
+    struct ClassObject *clazz;
     u4 lock;
     u4 length;
     u1 *contents;
-} ArrayObject;
+};
+
+struct RawDexFile {
+    char *cacheFileName;
+    struct DvmDex *pDvmDex;
+};
+
+/*
+   * Internal struct for managing DexFile.
+   */
+struct DexOrJar {
+    char *fileName;
+    bool isDex;
+    bool okayToFree;
+    struct RawDexFile *pRawDexFile;
+    void *pJarFile;
+    u1 *pDexMemory; // malloc()ed memory, if any
+};
 
 
 //定义
@@ -110,7 +186,7 @@ JNIEXPORT jint JNICALL Multidex_openDexFile(
     u1 *dexData = (u1 *) (*env)->GetByteArrayElements(env, dexArray, NULL);
     char *arr;
     arr = (char *) malloc((size_t) (array_object_contents_offset + dexLen));
-    ArrayObject *ao = (ArrayObject *) arr;
+    struct ArrayObject *ao = (struct ArrayObject *) arr;
     ao->length = (u4) dexLen;
     memcpy(arr + array_object_contents_offset, dexData, dexLen);
     u4 args[] = {(u4) ao};
@@ -119,6 +195,14 @@ JNIEXPORT jint JNICALL Multidex_openDexFile(
     if (openDexFile != NULL) {
         openDexFile(args, &pResult);
         result = (jint) pResult.l;
+    }
+    if (result != -1) {
+        jclass clazz = (*env)->FindClass(env, "com/android/dex/Dex");
+        jmethodID jmethodId = (*env)->GetMethodID(env, clazz, "<init>", "([B)V");
+        jobject dex = (*env)->NewObject(env, clazz, jmethodId, dexArray);
+        jobject dex_object = (*env)->NewGlobalRef(env, dex);
+        struct DexOrJar *dexOrJar = pResult.l;
+        dexOrJar->pRawDexFile->pDvmDex->dex_object = dex_object;
     }
     return result;
 }
